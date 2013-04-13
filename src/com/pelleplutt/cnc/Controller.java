@@ -1,0 +1,411 @@
+package com.pelleplutt.cnc;
+
+import java.awt.Component;
+import java.awt.KeyboardFocusManager;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.io.File;
+
+import javax.swing.JButton;
+
+import com.pelleplutt.cnc.ctrl.CNCCommand;
+import com.pelleplutt.cnc.ctrl.GVirtualCNC;
+import com.pelleplutt.cnc.io.CNCBridge;
+import com.pelleplutt.cnc.io.CNCBridge.CNCListener;
+import com.pelleplutt.cnc.io.CNCBridge.CNCMacroListener;
+import com.pelleplutt.cnc.io.CNCCommunication;
+import com.pelleplutt.cnc.io.CNCProtocol;
+import com.pelleplutt.cnc.types.Point;
+import com.pelleplutt.cnc.types.UnitType;
+import com.pelleplutt.cnc.ui.CNCUI;
+import com.pelleplutt.util.Log;
+import com.pelleplutt.util.UIUtil;
+
+public class Controller {
+  static CNCUI ui;
+  static CNCBridge bridge;
+  static CNCCommunication comm;
+  static GVirtualCNC cncVirtual;
+  static ManualController manualControl;
+
+  static StateConnection connectionState;
+  static StateProgram programState;
+
+  static Program currentProgram = null;
+
+  public static final String ACTION_CONNECT_DISCONNECT = "conndis";
+  public static final String ACTION_SWITCH_MODE = "mode";
+  public static final String ACTION_ON_OFF = "onoff";
+  public static final String ACTION_PROGRAM_LOAD = "programload";
+  public static final String ACTION_PROGRAM = "program";
+  public static final String ACTION_PROGRAM_ABORT = "programabort";
+  public static final String ACTION_RESET = "reset";
+  public static final String ACTION_FIRMWARE = "fw";
+  public static final String ACTION_SET_REF_XY = "refxy";
+  public static final String ACTION_SET_REF_Z = "refz";
+  public static final String ACTION_GO_USER = "gouser";
+  public static final String ACTION_GO_HOME = "gohome";
+  public static final String ACTION_GO_ORIGO = "goorigo";
+  public static final String ACTION_CONFIG_APPLY = "confapply";
+
+  static int curSr = -1;
+
+  public static void construct() {
+    cncVirtual = new GVirtualCNC();
+    cncVirtual.reset();
+    cncVirtual.setHardcodedConfiguration();
+
+    bridge = new CNCBridge();
+    bridge.setMachine(cncVirtual);
+
+    ui = new CNCUI();
+
+    bridge.addCNCListener(ui.getBluePrintPanel());
+    bridge.addCNCListener(cncControllerListener);
+    bridge.addCNCMacroListener(cncProgramControllerListener);
+
+    bridge.initLatchQueue();
+
+    connectionState = StateConnection.DISCONNECTED;
+    bridge.setConnected(false);
+    
+    manualControl = new ManualController(bridge);
+    manualControl.start();
+    
+    KeyboardFocusManager manager = KeyboardFocusManager.getCurrentKeyboardFocusManager();
+    manager.addKeyEventDispatcher(manualControl.keyDispatcher);
+
+    reset();
+  }
+
+  public static void reset() {
+    programState = StateProgram.STOPPED;
+    bridge.reset(connectionState == StateConnection.CONNECTED);
+    currentProgram = null;
+  }
+
+  public static CNCUI getUI() {
+    return ui;
+  }
+
+  public static void uiNotify(State s) {
+    ui.uiNotify(s);
+  }
+  
+  public static GVirtualCNC getVCNC() {
+    return cncVirtual;
+  }
+
+  public static void disconnect() {
+    try {
+      comm.disconnect();
+      bridge.setConnected(false);
+      connectionState = StateConnection.DISCONNECTED;
+      uiNotify(connectionState);
+      comm = null;
+    } catch (Throwable t) {
+      Log.printStackTrace(t);
+    }
+  }
+
+  public static void connect(String port) {
+    Log.println(port);
+    int tries = 3;
+    while (tries-- > 0 && connectionState == StateConnection.DISCONNECTED) {
+      try {
+        comm = new CNCCommunication();
+        comm.setListener(ui.getBluePrintPanel());
+  
+        comm.connect(port, 115200, bridge);
+        connectionState = StateConnection.CONNECTED;
+        bridge.setConnected(true);
+        cncControllerListener.sr(bridge.cncGetStatus());
+        bridge.cncInit();
+      } catch (Throwable t) {
+        Log.printStackTrace(t);
+        connectionState = StateConnection.DISCONNECTED;
+        bridge.setConnected(false);
+      }
+    }
+    uiNotify(connectionState);
+  }
+
+  public static void loadProgram(File f) {
+    try {
+      cncVirtual.setOrigin();
+      Program p = Program.loadGCode(f, cncVirtual, ui.getBluePrintPanel());
+      ui.addProgram(p);
+    } catch (Throwable t) {
+      Log.printStackTrace(t);
+    }
+  }
+
+  public static Program getProgram() {
+    return currentProgram;
+  }
+  
+  public static boolean isManualEnabled() {
+    return (programState == StateProgram.PAUSED || programState == StateProgram.STOPPED)
+    && connectionState == StateConnection.CONNECTED;
+  }
+  
+  public static boolean isConnected() {
+    return connectionState == StateConnection.CONNECTED;
+  }
+  
+  public static Point unitToStep(Point p) {
+    return cncVirtual.unitToStep(p);
+  }
+
+  public static Point stepToUnit(Point p) {
+    return cncVirtual.stepToUnit(p);
+  }
+  
+  public static Point feedUPMtoSPS(Point p) {
+    p = unitToStep(p);
+    p.divideI(60);
+    return p;
+  }
+
+  // Action mappings
+
+  static void actionConnectDisconnect() {
+    if (connectionState == StateConnection.CONNECTED) {
+      disconnect();
+    } else {
+      connect(ui.getSelectedPort());
+    }
+  }
+
+  static void actionOnOff() {
+    if ((curSr & CNCProtocol.CNC_STATUS_CONTROL_ENABLED) == 0) {
+      bridge.cncEnable(true);
+    } else {
+      bridge.cncEnable(false);
+    }
+  }
+
+  public static void actionProgram() {
+    switch (programState) {
+    case STOPPED:
+      Program p = ui.getProgram();
+      currentProgram = p;
+      bridge.enterProgramMode();
+      Log.println("queueing " + p.cncCommandList.size() + " commands");
+      bridge.addQueuedCommands(p.cncCommandList);
+      bridge.latchQueueStart();
+      ui.setCommandInterval(p.cncCommandList.size());
+      break;
+    case RUNNING:
+      bridge.pauseProgramMode();
+      break;
+    case ENDING:
+      break;
+    case PAUSED:
+      bridge.resumeProgramMode();
+      break;
+    }
+
+  }
+
+  public static void actionReset() {
+    reset();
+  }
+
+  public static void actionProgramAbort() {
+    bridge.abortProgramMode();
+  }
+  
+  public static void actionRefXY() {
+    Point p = bridge.cncGetPos();
+    Point o = bridge.cncGetOffsPos();
+    bridge.cncSetOffs((int)(o.x - p.x), (int)(o.y - p.y), (int)(o.z));
+  }
+
+  public static void actionRefZ() {
+    Point p = bridge.cncGetPos();
+    Point o = bridge.cncGetOffsPos();
+    bridge.cncSetOffs((int)(o.x), (int)(o.y), (int)(o.z - p.z));
+  }
+
+  public static void actionGoUser() {
+    Point s = bridge.cncGetPos();
+    Point d = cncVirtual.unitToStep(ui.getUserPosition());
+    Point m = s.diff(d);
+    Log.println("S" + s + " D" + d + " M" + m);
+    bridge.goSomewhere(m, ui.getUserFeedRates(), true);
+  }
+
+  public static void actionGoHome() {
+    Point p = bridge.cncGetPos();
+    p.negateI();
+    bridge.goSomewhere(p, ui.getUserFeedRates(), true);
+  }
+
+  public static void actionGoOrigo() {
+    Point p = bridge.cncGetPos();
+    Point o = bridge.cncGetOffsPos();
+    Point m = p.diff(o);
+    bridge.goSomewhere(m, ui.getUserFeedRates(), true);
+  }
+  
+  public static void actionConfigApply() {
+    Point stepsPerUnit = ui.getConfig(GVirtualCNC.CONFIG_SPU);
+    Point maxFeedsSPS = ui.getConfig(GVirtualCNC.CONFIG_MAX_FEED);
+    Point absoluteMaxFrequency = ui.getConfig(GVirtualCNC.CONFIG_ABS_MAX_FEED);
+    Point rapidDelta = ui.getConfig(GVirtualCNC.CONFIG_RAPID_D);
+    Point axisInversion = ui.getConfig(GVirtualCNC.CONFIG_INVERT);
+    
+    cncVirtual.setStepsPerUnit(stepsPerUnit);
+    cncVirtual.setMaxFeedsAsStepsPerSec(maxFeedsSPS);
+    cncVirtual.setRapidFrequency(absoluteMaxFrequency);
+    cncVirtual.setRapidDelta(rapidDelta);
+    cncVirtual.setInversion(axisInversion);
+    
+    ui.updateAccordingToMachineSettings();
+    
+    bridge.cncConfigure(cncVirtual);
+  }
+  
+  public static void actionFirmware() {
+    // TODO
+    File f = UIUtil.selectFile(ui, "Select fw", "Load");
+    bridge.sendFile(f);
+  }
+
+  public static void setAction(Component c, String action) {
+    if (c instanceof JButton) {
+      ((JButton) c).setActionCommand(action);
+      ((JButton) c).addActionListener(actionListener);
+    }
+  }
+
+  static ActionListener actionListener = new ActionListener() {
+
+    @Override
+    public void actionPerformed(ActionEvent e) {
+      if (e.getActionCommand().equals(ACTION_CONNECT_DISCONNECT)) {
+        actionConnectDisconnect();
+      } else if (e.getActionCommand().equals(ACTION_ON_OFF)) {
+        actionOnOff();
+      } else if (e.getActionCommand().equals(ACTION_PROGRAM_LOAD)) {
+        File f = UIUtil.selectFile(ui, "Load program", "OK");
+        loadProgram(f);
+      } else if (e.getActionCommand().equals(ACTION_PROGRAM_ABORT)) {
+        actionProgramAbort();
+      } else if (e.getActionCommand().equals(ACTION_PROGRAM)) {
+        actionProgram();
+      } else if (e.getActionCommand().equals(ACTION_RESET)) {
+        actionReset();
+      } else if (e.getActionCommand().equals(ACTION_FIRMWARE)) {
+        actionFirmware();
+      } else if (e.getActionCommand().equals(ACTION_SET_REF_XY)) {
+        actionRefXY();
+      } else if (e.getActionCommand().equals(ACTION_SET_REF_Z)) {
+        actionRefZ();
+      } else if (e.getActionCommand().equals(ACTION_GO_USER)) {
+        actionGoUser();
+      } else if (e.getActionCommand().equals(ACTION_GO_HOME)) {
+        actionGoHome();
+      } else if (e.getActionCommand().equals(ACTION_GO_ORIGO)) {
+        actionGoOrigo();
+      } else if (e.getActionCommand().equals(ACTION_CONFIG_APPLY)) {
+        actionConfigApply();
+      }
+    }
+  };
+
+  // cnc listeners
+
+  static CNCListener cncControllerListener = new CNCListener() {
+    @Override
+    public void sr(int sr) {
+      if (curSr == -1) {
+        curSr = ~sr;
+      }
+      int changeSr = curSr ^ sr;
+      if ((changeSr & CNCProtocol.CNC_STATUS_CONTROL_ENABLED) != 0) {
+        uiNotify((sr & CNCProtocol.CNC_STATUS_CONTROL_ENABLED) == 0 ? StateOnOff.OFF
+            : StateOnOff.ON);
+      }
+      curSr = sr;
+    }
+
+    @Override
+    public void pos(double x, double y, double z) {
+      uiNotify(new StatePosition(new Point(UnitType.MILLIMETERS, x, y, z)));
+    }
+
+    @Override
+    public void curCommand(int id, double e, double s, CNCCommand c) {
+      uiNotify(new StateCommandExe(id - CNCBridge.MOTION_ID_START, c));
+    }
+  };
+
+  public static CNCMacroListener cncProgramControllerListener = new CNCMacroListener() {
+
+    @Override
+    public void stopped(boolean programEnd, Point where, Point offset) {
+      programState = programEnd ? StateProgram.STOPPED : StateProgram.PAUSED;
+      if (where != null) {
+        Log.println("cnc stop @ " + where + " offset " + offset);
+      }
+      uiNotify(programState);
+    }
+
+    @Override
+    public void ending(Point where, Point offset) {
+      if (where != null) {
+        Log.println("cnc ending @ " + where + " offset " + offset);
+      }
+      programState = StateProgram.ENDING;
+      uiNotify(programState);
+    }
+
+    @Override
+    public void started() {
+      programState = StateProgram.RUNNING;
+      uiNotify(programState);
+    }
+  };
+
+  // state enums
+
+  public interface State {
+  }
+
+  public static class StateCommandExe implements State {
+    public int ix;
+    CNCCommand c;
+
+    public StateCommandExe(int ix, CNCCommand c) {
+      this.ix = ix;
+      this.c = c;
+    }
+  }
+
+  public static class StatePosition implements State {
+    public Point p;
+
+    public StatePosition(Point p) {
+      this.p = p;
+    }
+  }
+
+  public enum StateConnection implements State {
+    CONNECTED, DISCONNECTED
+  }
+
+  public enum StateMode implements State {
+    PROGRAM, MANUAL
+  }
+
+  public enum StateOnOff implements State {
+    ON, OFF
+  }
+
+  public enum StateProgram implements State {
+    STOPPED, RUNNING, PAUSED, ENDING
+  }
+
+}

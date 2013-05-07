@@ -1,5 +1,7 @@
 package com.pelleplutt.comm;
 
+import java.io.IOException;
+
 import com.pelleplutt.util.HexUtil;
 import com.pelleplutt.util.Log;
 
@@ -66,6 +68,16 @@ public class CommLayerLink extends Layer {
 		}
 		
 		res = txByte(tx, crc & 0xff);
+    if (res != Comm.R_COMM_OK) {
+      return res;
+    }
+    
+    try {
+      comm.txer.flush(tx);
+    } catch (IOException ioe) {
+      Log.printStackTrace(ioe);
+      res = Comm.R_COMM_PHY_FAIL;
+    }
 		return res;
 	}
 

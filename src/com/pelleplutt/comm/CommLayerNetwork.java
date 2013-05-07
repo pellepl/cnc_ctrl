@@ -1,5 +1,7 @@
 package com.pelleplutt.comm;
 
+import com.pelleplutt.util.AppSystem;
+
 public class CommLayerNetwork extends Layer {
 	int addr;
 	public static final int COMM_H_SIZE_NWK = 1;
@@ -10,17 +12,23 @@ public class CommLayerNetwork extends Layer {
 
 	@Override
 	int tx(CommArgument tx) {
-		tx.src = comm.addr;
-		int dst = tx.dst;
-		if (dst == comm.addr && comm.userDifferentiation) {
-			return Comm.R_COMM_NWK_TO_SELF;
-		}
-		if (dst > Comm.COMM_MAX_USERS && !comm.userDifferentiation) {
-			return Comm.R_COMM_NWK_BAD_ADDR;
+		byte nwkData;
+		if ((tx.flags & Comm.COMM_STAT_ALERT_BIT) != 0) {
+		  nwkData = 0;
+		} else {
+	    tx.src = comm.addr;
+	    int dst = tx.dst;
+	    if (dst == comm.addr && comm.userDifferentiation) {
+	      return Comm.R_COMM_NWK_TO_SELF;
+	    }
+	    if (dst > Comm.COMM_MAX_USERS && !comm.userDifferentiation) {
+	      return Comm.R_COMM_NWK_BAD_ADDR;
+	    }
+		  nwkData = (byte)(((comm.addr << 4) & 0xf0) | (dst & 0x0f));
 		}
 		tx.len += COMM_H_SIZE_NWK;
 		tx.dataIx -= COMM_H_SIZE_NWK;
-		tx.data[tx.dataIx] = (byte)(((comm.addr << 4) & 0xf0) | (dst & 0x0f));
+		tx.data[tx.dataIx] = nwkData;
 		
 		return lowerLayer.tx(tx);
 	}
@@ -32,6 +40,13 @@ public class CommLayerNetwork extends Layer {
 		rx.dst = ((addresses & 0x0f));
 		rx.dataIx += COMM_H_SIZE_NWK;
 		rx.len -= COMM_H_SIZE_NWK;
+		if (rx.src == Comm.COMM_NWK_BROADCAST && rx.dst == Comm.COMM_NWK_BROADCAST) {
+		  // alert packet
+		  rx.flags |= Comm.COMM_STAT_ALERT_BIT;
+		  comm.callback.nodeAlert(rx.data[rx.dataIx], rx.data[rx.dataIx+1], 
+		      AppSystem.subByteArray(rx.data, rx.dataIx+2, rx.len - 2));
+		  return Comm.R_COMM_OK;
+		}
 		if (rx.src == comm.addr && comm.userDifferentiation) {
 			return Comm.R_COMM_NWK_TO_SELF;
 		}

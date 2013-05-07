@@ -41,6 +41,9 @@ public class CommLayerTransport extends Layer implements TickListener {
 				(tx.flags & Comm.COMM_FLAG_REQACK_BIT) != 0) {
 			return Comm.R_COMM_TRA_CANNOT_ACK_BROADCAST;
 		}
+		if ((tx.flags & Comm.COMM_STAT_ALERT_BIT) != 0) {
+		  return tx(tx, (short)0);
+		}
 		int u = comm.userDifferentiation ? tx.dst : 0;
 		if ((tx.flags & Comm.COMM_STAT_REPLY_BIT) == 0) {
 			// plain send, take nbr from sequence index for this dst and increase
@@ -58,19 +61,23 @@ public class CommLayerTransport extends Layer implements TickListener {
 	
 	int tx(CommArgument tx, short seqno) {
 		synchronized (this) {
-			tx.seqno = seqno;
-			short traHeader = (short)((seqno << 4) | ((tx.flags) & ~(COMM_TRA_SEQNO_MASK)));
-			tx.len += COMM_H_SIZE_TRA;
-			tx.dataIx -= COMM_H_SIZE_TRA;
-			tx.data[tx.dataIx] = (byte)(traHeader >> 8);
-			tx.data[tx.dataIx+1] = (byte)(traHeader & 0xff);
-			if ((tx.flags & Comm.COMM_FLAG_REQACK_BIT) != 0) {
-			    // this is to be acked, save for resend
-				int res = registerTxAck(tx);
-				if (res != Comm.R_COMM_OK) {
-					return res;
-				}
-			}
+	    if ((tx.flags & Comm.COMM_STAT_ALERT_BIT) != 0) {
+	      tx.seqno = 0;
+	    } else {
+  			tx.seqno = seqno;
+  			short traHeader = (short)((seqno << 4) | ((tx.flags) & ~(COMM_TRA_SEQNO_MASK)));
+  			tx.len += COMM_H_SIZE_TRA;
+  			tx.dataIx -= COMM_H_SIZE_TRA;
+  			tx.data[tx.dataIx] = (byte)(traHeader >> 8);
+  			tx.data[tx.dataIx+1] = (byte)(traHeader & 0xff);
+  			if ((tx.flags & Comm.COMM_FLAG_REQACK_BIT) != 0) {
+  			    // this is to be acked, save for resend
+  				int res = registerTxAck(tx);
+  				if (res != Comm.R_COMM_OK) {
+  					return res;
+  				}
+  			}
+	    }
 			return lowerLayer.tx(tx);
 		}
 	}

@@ -13,8 +13,13 @@ public class CommLayerPhy extends Layer {
 
 	@Override
 	int tx(CommArgument tx) {
-		comm.txer.tx(tx.txByte);
-		return Comm.R_COMM_OK;
+	  int res;
+	  try {
+  		res = comm.txer.tx(tx.txByte);
+	  } catch (IOException e) {
+	    res = Comm.R_COMM_PHY_FAIL;
+	  }
+		return res;
 	}
 
 	@Override

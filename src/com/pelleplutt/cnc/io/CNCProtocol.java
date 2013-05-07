@@ -33,11 +33,6 @@ public interface CNCProtocol {
   public static final int  COMM_PROTOCOL_SET_OFFS_POS         = 0x21;
   public static final int  COMM_PROTOCOL_GET_OFFS_POS         = 0x22;
   
-  public static final int  COMM_PROTOCOL_FILE_TRANSFER_R      = 0x80;
-  public static final int  COMM_PROTOCOL_FILE_TRANSFER_A      = 0x81;
-  public static final int  COMM_FILE_REPLY_OK                 = 0x04;
-  public static final int  COMM_FILE_MAX_DATA_PKT             = Comm.COMM_APP_MAX_DATA - 5;
-
   public static final int  COMM_PROTOCOL_EVENT_SR_TIMER       = 0xe1;
   public static final int  COMM_PROTOCOL_EVENT_POS_TIMER      = 0xe2;
   public static final int  COMM_PROTOCOL_EVENT_SR_POS_TIMER   = 0xe3;

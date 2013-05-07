@@ -1,28 +1,19 @@
 package com.pelleplutt.cnc.io;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 
 import com.pelleplutt.cnc.Controller;
+import com.pelleplutt.cnc.Essential;
 import com.pelleplutt.comm.Callback;
 import com.pelleplutt.comm.Comm;
 import com.pelleplutt.comm.CommRxer;
-import com.pelleplutt.comm.CommTimeoutException;
 import com.pelleplutt.comm.CommTxer;
-import com.pelleplutt.io.Port;
-import com.pelleplutt.io.PortConnector;
 import com.pelleplutt.util.AppSystem;
 import com.pelleplutt.util.AppSystem.Disposable;
 import com.pelleplutt.util.Log;
 
-public class CNCCommunication implements Disposable {
-  PortConnector connector;
-  String portString;
-  int baud;
+public abstract class CNCCommunication implements Disposable {
   Comm comm;
-  InputStream in;
-  OutputStream out;
   volatile boolean running = true;
   volatile int txTime, rxTime;
   boolean txReported;
@@ -30,33 +21,25 @@ public class CNCCommunication implements Disposable {
   static final int MAX_TIME_TX = 5;
   static final int MAX_TIME_RX = 5;
   RxTxListener l;
-  static public final long COMM_TICK_TIME = 20;
+  static public final long COMM_TICK_TIME = 90;
 
   public void setListener(RxTxListener listener) {
     this.l = listener;
   }
+  
+  public void gotNode(int address, int type, byte[] extra) {
+  }
 
+  protected abstract CommRxer createRxer();
+  protected abstract CommTxer createTxer();
+  protected abstract void connectImpl(String port, int baud)
+      throws Exception;
+  
   public void connect(String port, int baud, Callback callback)
       throws Exception {
-    if (port.startsWith("tty")) {
-      port = "/dev/" + port;
-    }
-    portString = port;
-    Port portSetting = new Port();
-    portSetting.baud = baud;
-    portSetting.databits = Port.BYTESIZE_8;
-    portSetting.parity = Port.PARITY_NO;
-    portSetting.portName = portString;
-    portSetting.stopbits = Port.STOPBIT_ONE;
-    portSetting.uiName = "Stewie";
-    connector = PortConnector.getPortConnector();
-    connector.setTimeout(7000);
-    connector.connect(portSetting);
-    in = connector.getInputStream();
-    out = connector.getOutputStream();
-
-    SerialHandler rxtx = new SerialHandler();
-    comm = new Comm(2, callback, rxtx, rxtx);
+    connectImpl(port, baud);
+    
+    comm = new Comm(Essential.COMM_ADDRESS, callback, createRxer(), createTxer());
 
     Thread thrRx = new Thread(new Runnable() {
       public void run() {
@@ -66,7 +49,7 @@ public class CNCCommunication implements Disposable {
         Log.println("cnccomm reader ended");
         Controller.disconnect();
       }
-    }, "rxer");
+    }, "comm-rxer");
     thrRx.setPriority(Thread.MAX_PRIORITY);
     thrRx.start();
 
@@ -77,6 +60,8 @@ public class CNCCommunication implements Disposable {
             Thread.sleep(COMM_TICK_TIME);
           } catch (Throwable t) {
           }
+          if (!running) break;
+          
           comm.tick(comm.getAndAddTime());
 
           if (txTime == MAX_TIME_TX && !txReported) {
@@ -113,7 +98,7 @@ public class CNCCommunication implements Disposable {
           }
         }
       }
-    }, "ticker");
+    }, "comm-ticker");
     thrTicker.setPriority(Thread.MIN_PRIORITY);
     thrTicker.start();
 
@@ -121,13 +106,27 @@ public class CNCCommunication implements Disposable {
     AppSystem.addDisposable(this);
   }
 
+  abstract protected void disconnectMedia() throws IOException;
+  
+  protected void fatalError() {
+    running = false;
+  }
+  
+  protected void signalTx() {
+    txTime = MAX_TIME_TX;
+  }
+  
+  protected void signalRx() {
+    rxTime = MAX_TIME_RX;
+  }
+
   private void doDisconnect() throws IOException {
     Log.println("cnccomm disconnecting");
     running = false;
-    connector.disconnect();
+    disconnectMedia();
     Log.println("cnccomm disconnected");
   }
-
+  
   public void disconnect() throws IOException {
     AppSystem.dispose(this);
   }
@@ -140,34 +139,7 @@ public class CNCCommunication implements Disposable {
     Log.println("disposed");
   }
 
-  class SerialHandler implements CommRxer, CommTxer {
-    @Override
-    public void tx(int i) {
-      try {
-        txTime = MAX_TIME_TX;
-        out.write(i);
-      } catch (IOException ioe) {
-        Log.printStackTrace(ioe);
-        running = false;
-      }
-    }
-
-    @Override
-    public int rx() throws CommTimeoutException {
-      try {
-        int c = in.read();
-        rxTime = MAX_TIME_RX;
-        return c;
-      } catch (IOException ioe) {
-        Log.printStackTrace(ioe);
-        running = false;
-      }
-      return -1;
-    }
-  }
-
   public interface RxTxListener {
     public void rxtx(boolean rx, boolean tx);
   }
-
 }

@@ -16,7 +16,7 @@ public class CommLayerApp extends AckLayer {
 
 	@Override
 	int rx(CommArgument rx) {
-		return comm.callback.rx(rx, AppSystem.subByteArray(rx.data, Comm.COMM_H_SIZE, rx.len));
+		return comm.callback.rx(rx, AppSystem.subByteArray(rx.data, Comm.COMM_H_SIZE, rx.len), 0);
 	}
 
 	@Override

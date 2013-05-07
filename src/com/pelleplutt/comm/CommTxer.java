@@ -1,5 +1,8 @@
 package com.pelleplutt.comm;
 
+import java.io.IOException;
+
 public interface CommTxer {
-	public void tx(int i);
+	public int tx(int i) throws IOException;
+	public int flush(CommArgument tx) throws IOException;
 }

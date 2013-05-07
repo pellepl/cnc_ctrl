@@ -4,7 +4,10 @@ import java.awt.Component;
 import java.awt.KeyboardFocusManager;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 
 import javax.swing.JButton;
 
@@ -14,7 +17,10 @@ import com.pelleplutt.cnc.io.CNCBridge;
 import com.pelleplutt.cnc.io.CNCBridge.CNCListener;
 import com.pelleplutt.cnc.io.CNCBridge.CNCMacroListener;
 import com.pelleplutt.cnc.io.CNCCommunication;
+import com.pelleplutt.cnc.io.CNCCommunicationUART;
+import com.pelleplutt.cnc.io.CNCFile;
 import com.pelleplutt.cnc.io.CNCProtocol;
+import com.pelleplutt.cnc.io.CommMux;
 import com.pelleplutt.cnc.types.Point;
 import com.pelleplutt.cnc.types.UnitType;
 import com.pelleplutt.cnc.ui.CNCUI;
@@ -24,7 +30,9 @@ import com.pelleplutt.util.UIUtil;
 public class Controller {
   static CNCUI ui;
   static CNCBridge bridge;
-  static CNCCommunication comm;
+  static CNCFile fileTx;
+  static CNCCommunication cncComm;
+  static CommMux commMux;
   static GVirtualCNC cncVirtual;
   static ManualController manualControl;
 
@@ -55,9 +63,15 @@ public class Controller {
     cncVirtual.reset();
     cncVirtual.setHardcodedConfiguration();
 
+    commMux = new CommMux();
+    
     bridge = new CNCBridge();
     bridge.setMachine(cncVirtual);
-
+    fileTx = new CNCFile();
+    
+    commMux.addTransport(bridge);
+    commMux.addTransport(fileTx);
+    
     ui = new CNCUI();
 
     bridge.addCNCListener(ui.getBluePrintPanel());
@@ -77,7 +91,65 @@ public class Controller {
 
     reset();
   }
+  
+  public static int tx(CommMux.Transport t, byte[] data, boolean ack) {
+    return commMux.tx(t, data, ack);
+  }
 
+  public static byte[] constructPacket(int command, Object...params) {
+    ByteArrayOutputStream packet = new ByteArrayOutputStream();
+    packet.write(0xff); // protocol id, to be defined in CommMux
+    packet.write(command);
+    for (int i = 0; i < params.length; i++) {
+      if (params[i] instanceof Integer) {
+        itoarr32((Integer)params[i], packet);
+      } else if (params[i] instanceof Short) {
+        itoarr16((Short)params[i], packet);
+      } else if (params[i] instanceof Character) {
+        itoarr16((short)((Character)params[i]).charValue(), packet);
+      } else if (params[i] instanceof Byte) {
+        packet.write((byte)((Byte)params[i]).byteValue());
+      } else if (params[i] instanceof ByteBuffer) {
+        try {
+          packet.write(((ByteBuffer)params[i]).array());
+        } catch (IOException e) {
+          Log.printStackTrace(e);
+        }
+      } else if (params[i] instanceof String) {
+        String s = (String)params[i];
+        byte[] sb = s.getBytes();
+        for (int t = 0; t < sb.length; t++) {
+          packet.write((byte)(sb[t]));
+        }
+        packet.write((byte)0);
+      } else {
+        throw new RuntimeException("Unknown packet type " + params[i].getClass().getName());
+      }
+    }
+    
+    byte[] raw = packet.toByteArray();
+    return raw;
+  }
+  
+
+  public static int arrtoi(byte[] data, int offset) {
+    return ((data[offset++] & 0xff) << 0) | ((data[offset++] & 0xff) << 8)
+        | ((data[offset++] & 0xff) << 16) | ((data[offset] & 0xff) << 24);
+  }
+
+  public static void itoarr32(int i, ByteArrayOutputStream out) {
+    out.write((byte)i);
+    out.write((byte)(i>>8));
+    out.write((byte)(i>>16));
+    out.write((byte)(i>>24));
+  }
+
+  public static void itoarr16(short i, ByteArrayOutputStream out) {
+    out.write((byte)i);
+    out.write((byte)(i>>8));
+  }
+
+  
   public static void reset() {
     programState = StateProgram.STOPPED;
     bridge.reset(connectionState == StateConnection.CONNECTED);
@@ -98,31 +170,40 @@ public class Controller {
 
   public static void disconnect() {
     try {
-      comm.disconnect();
+      cncComm.disconnect();
       bridge.setConnected(false);
       connectionState = StateConnection.DISCONNECTED;
       uiNotify(connectionState);
-      comm = null;
+      cncComm = null;
     } catch (Throwable t) {
       Log.printStackTrace(t);
     }
   }
+  
+  public static CNCCommunication getCncCommunicator() {
+    return cncComm;
+  }
 
   public static void connect(String port) {
     Log.println(port);
-    int tries = 3;
+    int tries = 1;
     while (tries-- > 0 && connectionState == StateConnection.DISCONNECTED) {
       try {
-        comm = new CNCCommunication();
-        comm.setListener(ui.getBluePrintPanel());
-  
-        comm.connect(port, 115200, bridge);
+        cncComm = new CNCCommunicationUART(); // TODO PETER
+        //cncComm = new CNCCommunicationUDP(); // TODO PETER
+        cncComm.setListener(ui.getBluePrintPanel());
+
+        cncComm.connect(port, 115200, commMux);
         connectionState = StateConnection.CONNECTED;
         bridge.setConnected(true);
         cncControllerListener.sr(bridge.cncGetStatus());
         bridge.cncInit();
+        commMux.txNodeAlert(0x12, null);
       } catch (Throwable t) {
         Log.printStackTrace(t);
+        try {
+          if (cncComm != null) cncComm.disconnect();
+        } catch (IOException e) {}
         connectionState = StateConnection.DISCONNECTED;
         bridge.setConnected(false);
       }
@@ -171,8 +252,10 @@ public class Controller {
 
   static void actionConnectDisconnect() {
     if (connectionState == StateConnection.CONNECTED) {
+      Log.println("<< DISCONNECTING");
       disconnect();
     } else {
+      Log.println(">> CONNECTING");
       connect(ui.getSelectedPort());
     }
   }
@@ -270,7 +353,7 @@ public class Controller {
   public static void actionFirmware() {
     // TODO
     File f = UIUtil.selectFile(ui, "Select fw", "Load");
-    bridge.sendFile(f);
+    fileTx.sendFile(f);
   }
 
   public static void setAction(Component c, String action) {

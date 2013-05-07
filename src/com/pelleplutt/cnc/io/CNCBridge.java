@@ -1,12 +1,5 @@
 package com.pelleplutt.cnc.io;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -22,10 +15,10 @@ import com.pelleplutt.cnc.ctrl.GCommand.Spindle;
 import com.pelleplutt.cnc.ctrl.GCommand.Stop;
 import com.pelleplutt.cnc.ctrl.GCommand.Tool;
 import com.pelleplutt.cnc.ctrl.GVirtualCNC;
+import com.pelleplutt.cnc.io.CommMux.Transport;
 import com.pelleplutt.cnc.types.Point;
 import com.pelleplutt.cnc.types.StopType;
 import com.pelleplutt.cnc.types.UnitType;
-import com.pelleplutt.comm.Callback;
 import com.pelleplutt.comm.Comm;
 import com.pelleplutt.comm.CommArgument;
 import com.pelleplutt.util.AppSystem;
@@ -43,7 +36,7 @@ import com.pelleplutt.util.Log;
  * @author petera
  * 
  */
-public class CNCBridge implements Callback, CNCProtocol, Disposable {
+public class CNCBridge implements Transport, CNCProtocol, Disposable {
   // indicates if the bridge should shut down
   volatile boolean disposed = false;
   // Communication stack
@@ -111,9 +104,6 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
   List<CNCMacroListener> macroListeners = new ArrayList<CNCMacroListener>();
 
   GVirtualCNC machine;
-
-  FileChannel transmitFileCh;
-  RandomAccessFile transmitFile = null;
 
   static final int ACK_MATCH = -1;
 
@@ -694,7 +684,7 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
   public int cncProtocolInfo() {
     Log.println("");
     byte[] res = sendCommand(COMM_PROTOCOL_INFO);
-    int r = arrtoi(res, 0);
+    int r = Controller.arrtoi(res, 0);
     Log.println("res:" + HexUtil.toHex(r));
     return r;
   }
@@ -706,7 +696,7 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
 
   public int cncGetStatus() {
     byte[] res = sendCommand(COMM_PROTOCOL_GET_STATUS);
-    int r = arrtoi(res, 0);
+    int r = Controller.arrtoi(res, 0);
     Log.println("res:" + HexUtil.toHex(r));
     return r;
   }
@@ -718,14 +708,14 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
 
   public boolean cncIsLatchFree() {
     byte[] res = sendCommand(COMM_PROTOCOL_IS_LATCH_FREE);
-    int r = arrtoi(res, 0);
+    int r = Controller.arrtoi(res, 0);
     Log.println("res:" + HexUtil.toHex(r));
     return r != 0;
   }
 
   public int cncCurrentMotionId() {
     byte[] res = sendCommand(COMM_PROTOCOL_CUR_MOTION_ID);
-    int r = arrtoi(res, 0);
+    int r = Controller.arrtoi(res, 0);
     Log.println("res:" + HexUtil.toHex(r));
     return r;
   }
@@ -762,14 +752,14 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
         (int) Math.round(fx * feedMul * (1 << CNC_FP_DECIMALS)), y,
         (int) Math.round(fy * feedMul * (1 << CNC_FP_DECIMALS)), z,
         (int) Math.round(fz * feedMul * (1 << CNC_FP_DECIMALS)), rapid ? 1 : 0);
-    int r = arrtoi(res, 0);
+    int r = Controller.arrtoi(res, 0);
     // Log.println("res:" + HexUtil.toHex(r));
     return r != 0;
   }
 
   public boolean cncLatchPause(int ms) {
     byte[] res = sendCommand(COMM_PROTOCOL_LATCH_PAUSE, ms);
-    int r = arrtoi(res, 0);
+    int r = Controller.arrtoi(res, 0);
     // Log.println("res:" + HexUtil.toHex(r));
     return r != 0;
   }
@@ -817,9 +807,9 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
 
   public Point cncGetPos() {
     byte[] res = sendCommand(COMM_PROTOCOL_GET_POS);
-    int x = arrtoi(res, 0);
-    int y = arrtoi(res, 4);
-    int z = arrtoi(res, 8);
+    int x = Controller.arrtoi(res, 0);
+    int y = Controller.arrtoi(res, 4);
+    int z = Controller.arrtoi(res, 8);
     if (machine.axisInversion.x < 0) {
       x = -x;
     }
@@ -848,9 +838,9 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
 
   public Point cncGetOffsPos() {
     byte[] res = sendCommand(COMM_PROTOCOL_GET_OFFS_POS);
-    int x = arrtoi(res, 0);
-    int y = arrtoi(res, 4);
-    int z = arrtoi(res, 8);
+    int x = Controller.arrtoi(res, 0);
+    int y = Controller.arrtoi(res, 4);
+    int z = Controller.arrtoi(res, 8);
     if (machine.axisInversion.x < 0) {
       x = -x;
     }
@@ -875,71 +865,14 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
         (byte)COMM_PROTOCOL_CONFIG_RAPID_X_D, (int)machine.rapidDelta.x,
         (byte)COMM_PROTOCOL_CONFIG_RAPID_Y_D, (int)machine.rapidDelta.y,
         (byte)COMM_PROTOCOL_CONFIG_RAPID_Z_D, (int)machine.rapidDelta.z);
-    int r = arrtoi(res, 0);
+    int r = Controller.arrtoi(res, 0);
     // Log.println("res:" + HexUtil.toHex(r));
     return r != 0;
-  }
-  
-  public void sendFile(File f) {
-    Log.println("comm file sending file req: "  + f.getName());
-    try {
-      transmitFile = new RandomAccessFile(f, "r");
-      transmitFileCh = transmitFile.getChannel();
-    } catch (FileNotFoundException e) {
-      Log.printStackTrace(e);
-    } finally {
-    }
-    byte[] res = sendCommand(COMM_PROTOCOL_FILE_TRANSFER_R, 
-        (int)0xffffffff, 
-        (int)f.length(), (String)f.getName());
-    Log.println("comm file req res data: " + HexUtil.formatData(res));
-    int r = (res[0] & 0xff);
-    if (r != COMM_FILE_REPLY_OK) {
-      try {
-        if (transmitFile != null) {
-          transmitFile.close();
-        }
-      } catch (IOException e) {
-        Log.printStackTrace(e);
-      } finally {
-      }
-    }
-    // Log.println("res:" + HexUtil.toHex(r));
   }
 
   //
   // Communication low-level
   //
-
-  byte[] constructPacket(int command, Object...params) {
-    ByteArrayOutputStream packet = new ByteArrayOutputStream();
-    packet.write(command);
-    for (int i = 0; i < params.length; i++) {
-      if (params[i] instanceof Integer) {
-        itoarr((Integer)params[i], packet);
-      } else if (params[i] instanceof Byte) {
-        packet.write((byte)((Byte)params[i]).byteValue());
-      } else if (params[i] instanceof ByteBuffer) {
-        try {
-          packet.write(((ByteBuffer)params[i]).array());
-        } catch (IOException e) {
-          Log.printStackTrace(e);
-        }
-      } else if (params[i] instanceof String) {
-        String s = (String)params[i];
-        byte[] sb = s.getBytes();
-        for (int t = 0; t < sb.length; t++) {
-          packet.write((byte)(sb[t]));
-        }
-        packet.write((byte)0);
-      } else {
-        throw new RuntimeException("Unknown packet type " + params[i].getClass().getName());
-      }
-    }
-    
-    byte[] raw = packet.toByteArray();
-    return raw;
-  }
   
   /**
    * Sends a raw command over CNCProtocol, awaits ack and returns data
@@ -949,13 +882,13 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
    * @return data piggybacked on ack
    */
   byte[] sendCommand(int command, Object... params) {
-    byte[] raw = constructPacket(command, params);
+    byte[] raw = Controller.constructPacket(command, params);
     // Log.println("TX:" + HexUtil.formatData(raw));
 
     byte[] ret = new byte[0];
     synchronized (LOCK_TX) {
       synchronized (LOCK_TX_ACK) {
-        int res = comm.tx(1, raw, true);
+        int res = Controller.tx(this, raw, true);
         if (res < 0) {
           latchQueueStop();
           throw new CNCBridgeError("Error sending command " + res);
@@ -983,12 +916,12 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
    * 
    * @param data
    */
-  void handleRx(byte[] data) {
-    int comm = (int) (data[0] & 0xff);
+  void handleRx(byte[] data, int offset) {
+    int comm = (int) (data[offset] & 0xff);
     switch (comm) {
     case COMM_PROTOCOL_EVENT_SR:
     case COMM_PROTOCOL_EVENT_SR_TIMER: {
-      int sr = arrtoi(data, 1);
+      int sr = Controller.arrtoi(data, offset+1);
       cncSrChange(sr);
       for (CNCListener l : cncListeners) {
         l.sr(sr);
@@ -996,9 +929,9 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
       break;
     }
     case COMM_PROTOCOL_EVENT_POS_TIMER: {
-      int x = arrtoi(data, 1);
-      int y = arrtoi(data, 5);
-      int z = arrtoi(data, 9);
+      int x = Controller.arrtoi(data, offset+1);
+      int y = Controller.arrtoi(data, offset+5);
+      int z = Controller.arrtoi(data, offset+9);
       if (machine.axisInversion.x < 0) {
         x = -x;
       }
@@ -1018,10 +951,10 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
       break;
     }
     case COMM_PROTOCOL_EVENT_SR_POS_TIMER: {
-      int sr = arrtoi(data, 1);
-      int x = arrtoi(data, 5);
-      int y = arrtoi(data, 9);
-      int z = arrtoi(data, 13);
+      int sr = Controller.arrtoi(data, offset+1);
+      int x = Controller.arrtoi(data, offset+5);
+      int y = Controller.arrtoi(data, offset+9);
+      int z = Controller.arrtoi(data, offset+13);
       if (machine.axisInversion.x < 0) {
         x = -x;
       }
@@ -1043,7 +976,7 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
       break;
     }
     case COMM_PROTOCOL_EVENT_ID: {
-      int curMotionId = arrtoi(data, 1);
+      int curMotionId = Controller.arrtoi(data, offset+1);
       CNCCommand c = motionPipe.remove(curMotionId);
       Log.println("executing " + curMotionId + ", sent " + latchId + ", "
           + motionPipe.size() + " in pipe");
@@ -1066,34 +999,6 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
       // TODO
       break;
     }
-    case COMM_PROTOCOL_FILE_TRANSFER_A: {
-      int res = (int)(data[1] & 0xff);
-      final int seq = arrtoi(data, 2);
-      Log.println("comm file ack  res: " + res + " seq: " + seq);
-      if (res == COMM_FILE_REPLY_OK) {
-        int ix = seq * COMM_FILE_MAX_DATA_PKT;
-        try {
-          transmitFileCh.position(ix);
-          int len = (int)Math.min(transmitFileCh.size(), ix + COMM_FILE_MAX_DATA_PKT) - ix;
-          Log.println("comm file send " + ix + ", " + len + " bytes");
-          final ByteBuffer fileData = ByteBuffer.allocate(len);
-          transmitFileCh.read(fileData);
-          new Thread(new Runnable() {
-            public void run() {
-              Log.println("comm file sending seq: "  + seq);
-              byte[] res = sendCommand(COMM_PROTOCOL_FILE_TRANSFER_R, 
-                  seq,
-                  fileData);
-              Log.println("comm file send req ack data: " + HexUtil.formatData(res));
-            }
-          }).start();
-        } catch (IOException e) {
-          // TODO Auto-generated catch block
-          e.printStackTrace();
-        }
-      }
-      break;
-    }
     default:
       Log.println("UNKNOWN RX:" + HexUtil.formatDataSimple(data));
     }
@@ -1105,7 +1010,7 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
   }
 
   //
-  // Communication stack callbacks
+  // Communication Transport stack callbacks
   //
 
   @Override
@@ -1122,48 +1027,28 @@ public class CNCBridge implements Callback, CNCProtocol, Disposable {
   }
 
   @Override
-  public int rx(CommArgument rx, byte[] data) {
-    handleRx(data);
+  public int rx(CommArgument rx, byte[] data, int offset) {
+    handleRx(data, offset);
     return Comm.R_COMM_OK;
   }
-
+  
   @Override
-  public void inf(CommArgument rx) {
+  public boolean myRx(byte[] data, int offset) {
+    int proto = data[offset] & 0xff;
+    return proto == CommMux.PROTOCOL_CNC;
   }
-
+  
   @Override
   public void error(CommArgument a, boolean txOtherwiseRx, int error) {
-    Log.println("COMM ERROR:" + error);
+    Log.println("CNCBridge: comm error seq:" + a.seqno + " err:" + error);
   }
-
+  
   @Override
-  public long getTime() {
-    return commTime;
-  }
-
-  @Override
-  public long getAndAddTime() {
-    return commTime++;
-  }
-
-  @Override
-  public void registerComm(Comm comm) {
-    this.comm = comm;
+  public int getProtocolId() {
+    return CommMux.PROTOCOL_CNC;
   }
 
   // thisnthat
-
-  int arrtoi(byte[] data, int offset) {
-    return ((data[offset++] & 0xff) << 0) | ((data[offset++] & 0xff) << 8)
-        | ((data[offset++] & 0xff) << 16) | ((data[offset] & 0xff) << 24);
-  }
-
-  void itoarr(int i, ByteArrayOutputStream out) {
-    out.write((byte)i);
-    out.write((byte)(i>>8));
-    out.write((byte)(i>>16));
-    out.write((byte)(i>>24));
-  }
 
   public interface CNCListener {
     public void sr(int sr);

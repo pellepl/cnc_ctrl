@@ -1,5 +1,9 @@
 package com.pelleplutt.util;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+
 public class CRCUtil {
   
   public static final char CRC16_CCITT_INIT = 0xffff;
@@ -33,5 +37,18 @@ public class CRCUtil {
       buf[i] = (byte)0xee;
     }
     System.out.println(HexUtil.toHex((int)(calcCrcCCITT(buf))));
+  }
+
+  public static char calcCrcCCITT(FileChannel c) throws IOException {
+    ByteBuffer buf = ByteBuffer.allocate(256);
+    int rlen;
+    char crc = CRC16_CCITT_INIT;
+    while ((rlen = c.read(buf)) != -1) {
+      for (int i = 0; i < rlen; i++) {
+        crc = calcCrcCCITT(buf.get(i), crc);
+      }
+      buf.rewind();
+    }
+    return crc;
   }
 }

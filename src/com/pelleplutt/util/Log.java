@@ -54,7 +54,7 @@ public class Log {
   static final int STATE_INCLUDE_CLASSES = 3;
   
   static boolean ln = true;
-  static int maxPrefixStringInTabs = 0;
+  static int maxPrefixStringInSpaces = 20;
   
   static boolean stripPackages = true;
   static String thisClassName = Log.class.getName();
@@ -247,14 +247,14 @@ public class Log {
           sbPre.append(')');
         }
         sbPre.append(':');
-        sbPre.append('\t');
-        int lenInTabs = sbPre.length()/TAB;
-        maxPrefixStringInTabs = Math.max(maxPrefixStringInTabs, lenInTabs);
-        int extraTabs = 0;
-        if (lenInTabs < maxPrefixStringInTabs) {
-          extraTabs = (maxPrefixStringInTabs - lenInTabs);
-          for (int t = 0; t < extraTabs; t++) {
-            sbPre.append('\t');
+        sbPre.append(' ');
+        int lenInSpaces = sbPre.length();
+        maxPrefixStringInSpaces = Math.max(maxPrefixStringInSpaces, lenInSpaces);
+        int extraSpaces = 0;
+        if (lenInSpaces < maxPrefixStringInSpaces) {
+          extraSpaces = (maxPrefixStringInSpaces - lenInSpaces);
+          for (int t = 0; t < extraSpaces; t++) {
+            sbPre.append(' ');
           }
         }
         sb.insert(0, sbPre);

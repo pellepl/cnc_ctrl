@@ -1,6 +1,5 @@
 package com.pelleplutt.cnc.io;
 
-import com.pelleplutt.comm.Comm;
 
 public interface CNCProtocol {
   public static final int  CNC_COMM_VERSION                   = 0x00010000;
@@ -70,4 +69,6 @@ public interface CNCProtocol {
   public static final int  CNC_STATUS_ERR_EMERGENCY     = 1 << (COMM_ERROR_BIT_EMERGENCY + 8);
   public static final int  CNC_STATUS_ERR_SETTINGS_CORRUPT  = 1 << (COMM_ERROR_BIT_SETTINGS_CORRUPT + 8);
   public static final int  CNC_STATUS_ERR_COMM_LOST     = 1 << (COMM_ERROR_BIT_COMM_LOST + 8);
+  
+  public static final int CNC_ERR_LATCH_BUSY			   = -1;
 }

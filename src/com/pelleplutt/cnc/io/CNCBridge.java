@@ -37,6 +37,11 @@ import com.pelleplutt.util.Log;
  * 
  */
 public class CNCBridge implements Transport, CNCProtocol, Disposable {
+  public static final int COMMAND_SUCCESS = 0;
+  public static final int COMMAND_LATCH_BUSY_RETRY = -1;
+  public static final int COMMAND_LATCH_ID_MISMATCH_ERROR = -2;
+  public static final int COMMAND_FATAL_ERROR_STOP = -1000;
+
   // indicates if the bridge should shut down
   volatile boolean disposed = false;
   // Communication stack
@@ -61,15 +66,15 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
   // Lock for latchQueue, notified by CNC status changes
   final Object LOCK_SR = new Object();
   // Commands to be sent
-  List<CNCCommand> latchQ = new ArrayList<CNCCommand>();
+  List<CNCCommand> localLatchPipe = new ArrayList<CNCCommand>();
   // Current index of command to send in queued commands
-  int latchQIx = 0;
+  int localLatchPipeIx = 0;
   // Current communication time
   volatile long commTime = 0;
   // Current id of last sent command
   int latchId = 0;
   // Map with commands that have been sent to CNC but not yet executed
-  Map<Integer, CNCCommand> motionPipe = new HashMap<Integer, CNCCommand>();
+  Map<Integer, CNCCommand> latchedMotionPipe = new HashMap<Integer, CNCCommand>();
 
   double feedMul = 1;
 
@@ -152,7 +157,7 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
   public void reset(boolean connected) {
     Log.println("reset connected:" + connected);
 
-    motionPipe.clear();
+    latchedMotionPipe.clear();
     latchQueueStop();
 
     if (connected) {
@@ -168,9 +173,9 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
     }
     synchronized (LOCK_SR) {
       latchId = MOTION_ID_START;
-      latchQIx = 0;
+      localLatchPipeIx = 0;
       Log.println("latchQ cleared");
-      latchQ.clear();
+      localLatchPipe.clear();
       LOCK_SR.notifyAll();
     }
     synchronized (LOCK_STATE) {
@@ -184,7 +189,7 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
   }
 
   public synchronized void enterProgramMode() {
-    motionPipe.clear();
+    latchedMotionPipe.clear();
     Log.println("program mode enter");
     cncEnable(false);
     // reset movement registers = stop
@@ -278,16 +283,16 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
 
   public synchronized void abortProgramMode() {
     Log.println("program mode abort");
-    motionPipe.clear();
+    latchedMotionPipe.clear();
     latchQueueStop();
 
     cncEnable(false);
     cncPipeFlush();
     cncEnable(true);
     synchronized (LOCK_SR) {
-      latchQIx = 0;
+      localLatchPipeIx = 0;
       Log.println("latchQ cleared");
-      latchQ.clear();
+      localLatchPipe.clear();
       LOCK_SR.notifyAll();
     }
     synchronized (LOCK_STATE) {
@@ -299,16 +304,16 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
   }
 
   private synchronized void exitProgramMode() {
-    motionPipe.clear();
+    latchedMotionPipe.clear();
 
     Log.println("exit program mode");
     cncPipeEnable(false);
     cncPipeFlush();
     
     synchronized (LOCK_SR) {
-      latchQIx = 0;
+      localLatchPipeIx = 0;
       Log.println("latchQ cleared");
-      latchQ.clear();
+      localLatchPipe.clear();
       LOCK_SR.notifyAll();
     }
 
@@ -363,7 +368,7 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
   public void addQueuedCommand(CNCCommand c) {
     synchronized (LOCK_SR) {
       Log.println("latchQ add " + c);
-      latchQ.add(c);
+      localLatchPipe.add(c);
       LOCK_SR.notifyAll();
     }
   }
@@ -371,7 +376,7 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
   public void addQueuedCommands(List<CNCCommand> c) {
     synchronized (LOCK_SR) {
       Log.println("latchQ add " + c.size() + " commands");
-      latchQ.addAll(c);
+      localLatchPipe.addAll(c);
       LOCK_SR.notifyAll();
     }
   }
@@ -394,13 +399,13 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
 
   public boolean isProgramSent() {
     synchronized (LOCK_SR) {
-      return latchQIx >= latchQ.size();
+      return localLatchPipeIx >= localLatchPipe.size();
     }
   }
 
   public boolean isProgramExecuted() {
     synchronized (LOCK_SR) {
-      return (latchId - MOTION_ID_START) >= latchQ.size();
+      return (latchId - MOTION_ID_START) >= localLatchPipe.size();
     }
   }
 
@@ -408,22 +413,52 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
   // CNC Status monitoring, command dispatcher
   //
 
-  public boolean exe(CNCCommand c) {
-    boolean res = true;
+  public int exe(CNCCommand c) {
+    int cmdLatchId = -1;
+    int commandResult = COMMAND_FATAL_ERROR_STOP;
+    
+    // invoke command and check result
     // cncLatchXYZ and cncPause are put into pipe via latch
     // successful invokation means latch id is autoincremented
-    // so we keep track of it here
+    
+    // latch movement
     if (c instanceof Move) {
-      res = cncLatchXYZ((int) ((Move) c).stepsTranslation.x,
+      cmdLatchId = cncLatchXYZ((int) ((Move) c).stepsTranslation.x,
           ((Move) c).feedStepsPerSec.x, (int) ((Move) c).stepsTranslation.y,
           ((Move) c).feedStepsPerSec.y, (int) ((Move) c).stepsTranslation.z,
           ((Move) c).feedStepsPerSec.z, ((Move) c).rapid);
+      if (cmdLatchId == CNC_ERR_LATCH_BUSY) {
+        commandResult = COMMAND_LATCH_BUSY_RETRY;
+      } else if (cmdLatchId != latchId) {
+        Log.println("latch id mismatch local " + latchId + ", remote " + cmdLatchId);
+        commandResult = COMMAND_LATCH_ID_MISMATCH_ERROR;
+      } else {
+        commandResult = COMMAND_SUCCESS;
+      }
+
+    // latch pause
     } else if (c instanceof Dwell) {
-      res = cncLatchPause((int) ((Dwell) c).milliseconds);
+      cmdLatchId = cncLatchPause((int) ((Dwell) c).milliseconds);
+      if (cmdLatchId == CNC_ERR_LATCH_BUSY) {
+        commandResult = COMMAND_LATCH_BUSY_RETRY;
+      } else if (cmdLatchId != latchId) {
+        Log.println("latch id mismatch local " + latchId + ", remote " + cmdLatchId);
+        commandResult = COMMAND_LATCH_ID_MISMATCH_ERROR;
+      } else {
+        commandResult = COMMAND_SUCCESS;
+      }
+
+    // spindle command
     } else if (c instanceof Spindle) {
       // TODO
+      commandResult = COMMAND_SUCCESS;
+
+    // coolant command
     } else if (c instanceof Coolant) {
       // TODO
+      commandResult = COMMAND_SUCCESS;
+
+    // stop
     } else if (c instanceof Stop) {
       if (((Stop) c).type == StopType.OPTIONAL) {
         if (stopAtOptional) {
@@ -432,35 +467,41 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
       } else {
         latchQueueStop();
       }
+      commandResult = COMMAND_SUCCESS;
+
+    // tool switch
     } else if (c instanceof Tool) {
       // TODO
+      commandResult = COMMAND_SUCCESS;
+      
+    // end of program
     } else if (c instanceof EndOfProgram) {
       synchronized (LOCK_STATE) {
         setState(BridgeState.AWAIT_EOP);
         LOCK_STATE.notifyAll();
       }
-      res = true;
+      commandResult = COMMAND_SUCCESS;
     }
-    if (res) {
-      registerLatchedCommand(c);
-    }
-    return res;
-  }
-
-  void registerLatchedCommand(CNCCommand c) {
-    boolean motion = c instanceof Move || c instanceof Dwell;
-    if (motion) {
-      motionPipe.put(latchId, c);
-      synchronized (LOCK_SR) {
-        latchId++;
+    
+    // act upon type of command and result
+    if (commandResult == COMMAND_SUCCESS) {
+      boolean latchCommand = c instanceof Move || c instanceof Dwell;
+      if (latchCommand) {
+        latchedMotionPipe.put(latchId, c);
+        synchronized (LOCK_SR) {
+          latchId++;
+          Log.println("MOTION COMMAND sent, remote latchId " + cmdLatchId + ", local inc to " + latchId);
+        }
+      }
+      synchronized (LOCK_STATE) {
+        // update state if idle
+        if (state == BridgeState.IDLE) {
+          setState(BridgeState.STARTING);
+          LOCK_STATE.notifyAll();
+        }
       }
     }
-    synchronized (LOCK_STATE) {
-      if (state == BridgeState.IDLE) {
-        setState(BridgeState.STARTING);
-        LOCK_STATE.notifyAll();
-      }
-    }
+    return commandResult;
   }
 
   /**
@@ -492,7 +533,7 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
             && !isProgramSent()) {
           // all green, enabled, free, connected and ready => get a command to
           // send
-          command = latchQ.get(latchQIx++);
+          command = localLatchPipe.get(localLatchPipeIx++);
           if (isProgramSent()) {
             Log.println("EOP await by end of latchQ");
             synchronized (LOCK_STATE) {
@@ -502,20 +543,28 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
           }
         }
       } // synch
-
+      
       // execute command
       try {
         if (!disposed && command != null) {
-          boolean res = exe(command);
-          if (!res) {
+          int res = exe(command);
+          switch (res) {
+          case COMMAND_LATCH_BUSY_RETRY: {
             // failed for some reason, force mark sr latch as full and retry same
             // command next time
-            Log.println("!!!!!!! reinserting command " + latchQIx + " " + command);
+            Log.println("!!!!! reinserting command " + localLatchPipeIx + " " + command);
             synchronized (LOCK_SR) {
-              latchQIx--;
+              localLatchPipeIx--;
               srCur |= CNCProtocol.CNC_STATUS_LATCH_FULL;
               srPrev |= CNCProtocol.CNC_STATUS_LATCH_FULL;
             }
+          }
+          break;
+          case COMMAND_SUCCESS: 
+          break;
+          default:
+            Log.println("command failed badly err " + res);
+            throw new CNCBridgeError("command err:" + res);
           }
         }
       } catch (CNCBridge.CNCBridgeError cncErr) {
@@ -735,7 +784,7 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
     Log.println("");
   }
 
-  public boolean cncLatchXYZ(int x, double fx, int y, double fy, int z,
+  public int cncLatchXYZ(int x, double fx, int y, double fy, int z,
       double fz, boolean rapid) {
     if (machine.axisInversion.x < 0) {
       x = -x;
@@ -752,16 +801,16 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
         (int) Math.round(fx * feedMul * (1 << CNC_FP_DECIMALS)), y,
         (int) Math.round(fy * feedMul * (1 << CNC_FP_DECIMALS)), z,
         (int) Math.round(fz * feedMul * (1 << CNC_FP_DECIMALS)), rapid ? 1 : 0);
-    int r = Controller.arrtoi(res, 0);
+    int latchIdForCommand = Controller.arrtoi(res, 0);
     // Log.println("res:" + HexUtil.toHex(r));
-    return r != 0;
+    return latchIdForCommand;
   }
 
-  public boolean cncLatchPause(int ms) {
+  public int cncLatchPause(int ms) {
     byte[] res = sendCommand(COMM_PROTOCOL_LATCH_PAUSE, ms);
-    int r = Controller.arrtoi(res, 0);
+    int latchIdForCommand = Controller.arrtoi(res, 0);
     // Log.println("res:" + HexUtil.toHex(r));
-    return r != 0;
+    return latchIdForCommand;
   }
 
   public void cncSetPos(int x, int y, int z) {
@@ -888,12 +937,14 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
     byte[] ret = new byte[0];
     synchronized (LOCK_TX) {
       synchronized (LOCK_TX_ACK) {
-        int res = Controller.tx(this, raw, true);
-        if (res < 0) {
+        int seqNoOrErr = Controller.tx(this, raw, true);
+        if (seqNoOrErr < 0) {
+          // error
           latchQueueStop();
-          throw new CNCBridgeError("Error sending command " + res);
+          throw new CNCBridgeError("Error sending command " + seqNoOrErr);
         }
-        ackSeqNo = res;
+        ackSeqNo = seqNoOrErr;
+        Log.println("                               await ack " + HexUtil.toHex((int)ackSeqNo));
         AppSystem.waitSilently(LOCK_TX_ACK, 
             ((2 + Comm.COMM_MAX_RESENDS) * Comm.COMM_RESEND_TICK) * CNCCommunication.COMM_TICK_TIME);
         if (ackSeqNo != ACK_MATCH) {
@@ -907,9 +958,9 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
     return ret;
   }
 
-  int ackSeqNo;
-  byte[] ackData = new byte[Comm.COMM_LNK_MAX_DATA];
-  int ackLen;
+  volatile int ackSeqNo;
+  volatile byte[] ackData = new byte[Comm.COMM_LNK_MAX_DATA];
+  volatile int ackLen;
 
   /**
    * Packet reception, command muxxing
@@ -977,9 +1028,9 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
     }
     case COMM_PROTOCOL_EVENT_ID: {
       int curMotionId = Controller.arrtoi(data, offset+1);
-      CNCCommand c = motionPipe.remove(curMotionId);
+      CNCCommand c = latchedMotionPipe.remove(curMotionId);
       Log.println("executing " + curMotionId + ", sent " + latchId + ", "
-          + motionPipe.size() + " in pipe");
+          + latchedMotionPipe.size() + " in pipe");
       synchronized (LOCK_STATE) {
         if (state == BridgeState.IDLE) {
           setState(BridgeState.STARTING);
@@ -987,8 +1038,8 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
         }
       }
       if (c != null) {
-        double exe = (double) (curMotionId-MOTION_ID_START) / (double) latchQ.size();
-        double sent = (double) (latchQIx) / (double) latchQ.size();
+        double exe = (double) (curMotionId-MOTION_ID_START) / (double) localLatchPipe.size();
+        double sent = (double) (localLatchPipeIx) / (double) localLatchPipe.size();
         for (CNCListener l : cncListeners) {
           l.curCommand(curMotionId, exe, sent, c);
         }
@@ -1017,6 +1068,7 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
   public int ack(CommArgument rx, byte[] data) {
     synchronized (LOCK_TX_ACK) {
       if (rx.seqno == ackSeqNo) {
+        Log.println("                               ack " +  HexUtil.toHex((int)rx.seqno) + " len " + rx.len);
         System.arraycopy(data, 0, ackData, 0, rx.len);
         ackLen = rx.len;
         ackSeqNo = ACK_MATCH; // indicate we got acked

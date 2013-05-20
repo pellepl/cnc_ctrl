@@ -17,7 +17,7 @@ import com.pelleplutt.cnc.io.CNCBridge;
 import com.pelleplutt.cnc.io.CNCBridge.CNCListener;
 import com.pelleplutt.cnc.io.CNCBridge.CNCMacroListener;
 import com.pelleplutt.cnc.io.CNCCommunication;
-import com.pelleplutt.cnc.io.CNCCommunicationUART;
+import com.pelleplutt.cnc.io.CNCCommunicationUDP;
 import com.pelleplutt.cnc.io.CNCFile;
 import com.pelleplutt.cnc.io.CNCProtocol;
 import com.pelleplutt.cnc.io.CommMux;
@@ -189,8 +189,8 @@ public class Controller {
     int tries = 1;
     while (tries-- > 0 && connectionState == StateConnection.DISCONNECTED) {
       try {
-        cncComm = new CNCCommunicationUART(); // TODO PETER
-        //cncComm = new CNCCommunicationUDP(); // TODO PETER
+        //cncComm = new CNCCommunicationUART(); // TODO PETER
+        cncComm = new CNCCommunicationUDP(); // TODO PETER
         cncComm.setListener(ui.getBluePrintPanel());
 
         cncComm.connect(port, 115200, commMux);

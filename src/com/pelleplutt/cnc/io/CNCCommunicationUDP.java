@@ -166,7 +166,7 @@ public class CNCCommunicationUDP extends CNCCommunication implements CommRxer, C
       // Send a directed packet to node
       InetAddress dstIp = ipMap.get(tx.dst);
       // TODO PETER
-      byte[] hardcoded = {(byte)192, (byte)168, 0, (byte)231};
+      byte[] hardcoded = {(byte)192, (byte)168, 0, (byte)204};
       dstIp = InetAddress.getByAddress(hardcoded);
       if (dstIp == null) {
         return Comm.R_COMM_NWK_BAD_ADDR;

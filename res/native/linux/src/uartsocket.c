@@ -2,8 +2,23 @@
  ============================================================================
  Name        : uartsocket.c
  Author      : Peter Andersson
- Version     : 1.2
- Copyright   : LGPL (TODO)
+ Version     : 1.4
+
+ Copyright (c) 2012-2013, Peter Andersson pelleplutt1976@gmail.com
+
+ Permission to use, copy, modify, and/or distribute this software for any
+ purpose with or without fee is hereby granted, provided that the above
+ copyright notice and this permission notice appear in all copies.
+
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+ REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+ AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+ PERFORMANCE OF THIS SOFTWARE.
+
+
  Description : Pipes a serial socket to a TCP socket.
 
  ============================================================================
@@ -13,7 +28,7 @@
 // Includes
 //
 
-#define VERSION "1.2"
+#define VERSION "1.4"
 
 #define USE_TCP_NODELAY 0
 
@@ -65,19 +80,19 @@
 /**
  * Maximum amount of bytes handled when piping uart and socket
  */
-#define PIPE_BUF_SIZE   2048
+#define PIPE_BUF_SIZE   1024
 
 /**
  * Defines how many r/w calls returning zero bytes are allowed, in cases where
  * e.g. an FTDI USB UART is unplugged. This will not yield an error but will
  * loop indefinetly unless watched for.
  */
-#define MAX_ZERO_LOOPS  127
+#define MAX_ZERO_LOOPS  1023
 
-#define BASH_BUFFER_MAX        2048
-#define BASH_IX_BUFFER_MAX     256
+#define BASH_BUFFER_MAX 65536
+#define BASH_IX_BUFFER_MAX (BASH_BUFFER_MAX/CMD_BUF_LEN)
 
-#define BASHOUT(x) do {fprintf(stdout,(x)); fflush(stdout);} while(0);
+#define BASHOUT(x,...) do {fprintf(stdout,(x), ## __VA_ARGS__); fflush(stdout);} while(0);
 #define BASH_BS       "\b\b  \b\b\b \b"
 #define BASH_BSNO     "\b\b  \b\b"
 #define BASH_CLEARLN  "\33[2K\r"
@@ -119,12 +134,15 @@ struct ClientElem_s {
 
   char resbuf[CMD_BUF_LEN * 2];
   char cmdbuf[CMD_BUF_LEN];
+  char deviceString[64];
 
   char *bashBuf;
   int *bashIxBuf;
   int bashBufLen;
   int bashIx;
   int curBashIx;
+
+  int keepOpen;
 
   /** next element */
   struct ClientElem_s *pNext;
@@ -447,9 +465,6 @@ int setUART(ClientElem_t *pClient, int *argIx, int argc) {
       }
     }
       break;
-    default: {
-      SEND("ERROR unkown config: %c [B<baudrate>, D<5|6|7|8> databits, S<1|2> stopbits, P<n|o|e> parity, T<timeout>, M<vmin>, r<0|1> RTS output, d<0|1> DTR output]", pCmd[argIx[i]]);
-    }
     }
   }
 
@@ -480,11 +495,10 @@ int setUART(ClientElem_t *pClient, int *argIx, int argc) {
  * @param len maximum line length
  * @param pArgIx pointer to argument index buffer
  * @param pArgs pointer to argument counter
- * @param pRunning pointer to flag defining if read is interrupted
+ * @param error pointer to flag defining if read fails (0 = no fail)
  * @return length of line
  */
-static int readLine(int fd, char *pBuf, int len, int *pArgIx, int *pArgs,
-    volatile int *pRunning) {
+static int readLine(int fd, char *pBuf, int len, int *pArgIx, int *pArgs, int *error) {
   struct timeval time;
   fd_set set;
   int n;
@@ -493,7 +507,8 @@ static int readLine(int fd, char *pBuf, int len, int *pArgIx, int *pArgs,
   *pArgs = 0;
   pArgIx[0] = 0;
   int zeroByteCnt = 0;
-  while (*pRunning) {
+  int run = 1;
+  while (run) {
     FD_ZERO(&set);
     FD_SET(fd, &set);
     time.tv_sec = 1;
@@ -503,7 +518,8 @@ static int readLine(int fd, char *pBuf, int len, int *pArgIx, int *pArgs,
       n = read(fd, &i, 1);
       if (n < 0) {
         INFO("ERROR readLine");
-        *pRunning = 0;
+        *error = 1;
+        run = 0;
       } else if (n > 0) {
         zeroByteCnt = 0;
         if (i == '\n') {
@@ -528,7 +544,8 @@ static int readLine(int fd, char *pBuf, int len, int *pArgIx, int *pArgs,
         zeroByteCnt++;
         if (zeroByteCnt > MAX_ZERO_LOOPS) {
           DBG_PRINT("ERROR readLine %i zero byte counts", zeroByteCnt);
-          *pRunning = 0;
+          *error = 2;
+          run = 0;
         }
       }
     }
@@ -537,33 +554,32 @@ static int readLine(int fd, char *pBuf, int len, int *pArgIx, int *pArgs,
   return clen;
 }
 
-static int openDevice(ClientElem_t *pClient, int *argIx, int argCount) {
+static int openDevice(ClientElem_t *pClient, char *dev) {
   int n;
-  char *pCmd = pClient->cmdbuf;
-  int ttyfd = open(&pCmd[argIx[argCount]], O_RDWR/* | O_DIRECT */| O_NONBLOCK);
+  strncpy(pClient->deviceString, dev, 64);
+  int ttyfd = open(dev, O_RDWR/* | O_DIRECT */| O_NONBLOCK);
   if (ttyfd < 0) {
-    SEND("ERROR could not open \"%s\": %s", &pCmd[argIx[argCount]],
-        strerror(errno));
+    if (!pClient->keepOpen) SEND("ERROR could not open \"%s\": %s", dev, strerror(errno));
     return 1;
   } else {
     pClient->ttyfd = ttyfd;
     /* get current UART settings */
     if (tcgetattr(ttyfd, &pClient->termSettings) < 0) {
       SEND("ERROR could get configuration for \"%s\": %s",
-          &pCmd[argIx[argCount]], strerror(errno));
+          dev, strerror(errno));
       return -1;
     }
     /* get current UART line status */
     if (ioctl(ttyfd, TIOCMGET, &pClient->curStatus) < 0) {
       SEND("ERROR could not get status for \"%s\": %s",
-          &pCmd[argIx[argCount]], strerror(errno));
+          dev, strerror(errno));
       return -1;
     }
     /* disable input processing */
     pClient->termSettings.c_iflag &= ~(IGNBRK | BRKINT | ICRNL | INLCR
         | PARMRK | INPCK | ISTRIP | IXON | IXOFF);
     /* disable line processing */
-    pClient->termSettings.c_lflag &= ~(ECHO | ECHOE | ECHONL | ICANON | IEXTEN
+    pClient->termSettings.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN
         | ISIG);
     /* disable character processing, no hang-up */
     pClient->termSettings.c_cflag &= ~(HUPCL);
@@ -613,7 +629,7 @@ static int ctrlParse(ClientElem_t *pClient, int *argIx, int argCount,
   }
     /* Open device */
   case 'O': {
-    res = openDevice(pClient, argIx, 1);
+    res = openDevice(pClient, &pClient->cmdbuf[argIx[1]]);
     if (res > 0) res = 0;
     break;
   }
@@ -845,7 +861,7 @@ static void closeDataChannels(int ttyfd) {
   ClientElem_t *pCurClient = pClientListHead;
   while (pCurClient != NULL) {
     if (pCurClient->type == TYPE_DATA && pCurClient->ttyfd == ttyfd) {
-      DBG_PRINT("dataclient 0x%08X closing", (int)pCurClient);
+      DBG_PRINT("dataclient 0x%p closing", pCurClient);
       pCurClient->running = 0;
     }
     pCurClient = pCurClient->pNext;
@@ -862,12 +878,16 @@ static void *ctrlClientFunc(void *pVClient) {
   int argCount = 0;
   pClient->running = 1;
 
-  DBG_PRINT("client running 0x%08X", (int)pClient);
+  DBG_PRINT("client running %p", pClient);
 
   /* Control channel */
   while (pClient->running && pClient->type == TYPE_CONTROL) {
+    int readLineError;
     n = readLine(pClient->sockfd, pClient->cmdbuf, CMD_BUF_LEN, argIx,
-        &argCount, &pClient->running);
+        &argCount, &readLineError);
+    if (readLineError != 0) {
+      pClient->running = 0;
+    }
     DBG_PRINT("readline returned %i, argCount:%i, running:%i %s", n, argCount, pClient->running, pClient->cmdbuf);
     if (n > 0 && pClient->running) {
       n = ctrlParse(pClient, argIx, argCount, n);
@@ -886,7 +906,7 @@ static void *ctrlClientFunc(void *pVClient) {
   }
 
   /* Cleanup */
-  DBG_PRINT("client dead 0x%08X: %s", (int)pClient, pClient->type == TYPE_DATA ? "DATA" : "CTRL");
+  DBG_PRINT("client dead %p: %s", pClient, pClient->type == TYPE_DATA ? "DATA" : "CTRL");
   removeElementByAddress(pClient);
 
   g_liveClients--;
@@ -1023,12 +1043,14 @@ static int openServer(int port) {
   return EXIT_SUCCESS;
 }
 
-static void openTerminalClient(int argc, char **args) {
+static void openTerminalClient(int argc, char **args, int keepOpen) {
   ClientElem_t client;
   int res;
   int i;
   int ix = 0;
   int argIx[CMD_BUF_LEN/2];
+  int try = 0;
+
   memset(&client, 0, sizeof(client));
 
   // Use termios to turn off line buffering, we'll do our own
@@ -1046,7 +1068,7 @@ static void openTerminalClient(int argc, char **args) {
     ix += strlen(args[i]);
     client.cmdbuf[ix++] = '\0';
   }
-  if (openDevice(&client, argIx, 0) != 0) {
+  if (openDevice(&client, &client.cmdbuf[argIx[0]]) != 0) {
     return;
   }
   if (setUART(&client, argIx, argc-2) != 0) {
@@ -1058,8 +1080,29 @@ static void openTerminalClient(int argc, char **args) {
   client.bashIxBuf = malloc(BASH_IX_BUFFER_MAX * sizeof(int));
   memset(client.bashIxBuf, 0xff, BASH_IX_BUFFER_MAX * sizeof(int));
   client.bashIxBuf[client.bashIx++] = 0;
+  client.keepOpen = keepOpen;
 
-  pipeData(&client);
+  do {
+    pipeData(&client);
+    if (client.keepOpen) {
+      int res;
+      close(client.ttyfd);
+      BASHOUT(BASH_CLEARLN"Connection lost, retry %i...", ++try);
+      sleep(1);
+      res = openDevice(&client, client.deviceString);
+      if (res < 0) {
+        break;
+      } else if (res == 0) {
+        res = tcsetattr(client.ttyfd, TCSADRAIN, &client.termSettings);
+        if (res < 0) {
+          break;
+        }
+        INFO("Reconnected");
+        try = 0;
+        client.running = 1;
+      }
+    }
+  } while (client.keepOpen);
 
   free(client.bashBuf);
   free(client.bashIxBuf);
@@ -1079,12 +1122,14 @@ int main(int argc, char **args) {
   if (argc == 2) {
     port = atoi(args[1]);
   } else if (argc >= 3 && strcmp("-o", args[1]) == 0) {
-    openTerminalClient(argc, args);
+    openTerminalClient(argc, args, 0);
+  } else if (argc >= 3 && strcmp("-O", args[1]) == 0) {
+    openTerminalClient(argc, args, 1);
   } else {
     INFO("uartsocket "VERSION);
-
-    INFO("usage: uartsocket -o <device> (<settings>)");
+    INFO("usage: uartsocket -[o|O] <device> (<settings>)");
     INFO("       uartsocket <port>");
+    INFO("       where -o simply opens port, and -O tries to hold port open if device fails");
     INFO("       where <settings> can be any combination of:");
     INFO("       B<baudrate> | D<databits> | S<stopbits> | P<parity (n|o|e)>");
     INFO("   ex: uartsocket -o /dev/ttyUSB0 B115200 D8 S1 Pn");

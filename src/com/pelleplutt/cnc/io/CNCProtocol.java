@@ -38,8 +38,6 @@ public interface CNCProtocol {
   public static final int  COMM_PROTOCOL_EVENT_SR             = 0xe4;
   public static final int  COMM_PROTOCOL_EVENT_ID             = 0xe5;
 
-  public static final int  COMM_PROTOCOL_ALIVE                = 0xff;
-  
   public static final int  COMM_PROTOCOL_RESET                = 0xfe;
   
   public static final int  CNC_FP_DECIMALS        = 14;

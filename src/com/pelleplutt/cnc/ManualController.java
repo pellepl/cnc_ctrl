@@ -3,7 +3,7 @@ package com.pelleplutt.cnc;
 import java.awt.KeyEventDispatcher;
 import java.awt.event.KeyEvent;
 
-import com.pelleplutt.cnc.io.CNCBridge;
+import com.pelleplutt.cnc.io.CommProtoCnc;
 import com.pelleplutt.cnc.types.Point;
 import com.pelleplutt.util.AppSystem;
 import com.pelleplutt.util.AppSystem.Disposable;
@@ -18,12 +18,12 @@ public class ManualController implements Disposable {
   final static int DIR_OUT = 32;
 
   int dirMask = 0;
-  CNCBridge bridge;
+  CommProtoCnc bridge;
   final Object LOCK_MANUAL = new Object();
   volatile boolean disposed = false;
   boolean movement;
   
-  public ManualController(CNCBridge bridge) {
+  public ManualController(CommProtoCnc bridge) {
     this.bridge = bridge;
     AppSystem.addDisposable(this);
   }

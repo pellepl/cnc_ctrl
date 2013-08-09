@@ -13,14 +13,15 @@ import javax.swing.JButton;
 
 import com.pelleplutt.cnc.ctrl.CNCCommand;
 import com.pelleplutt.cnc.ctrl.GVirtualCNC;
-import com.pelleplutt.cnc.io.CNCBridge;
-import com.pelleplutt.cnc.io.CNCBridge.CNCListener;
-import com.pelleplutt.cnc.io.CNCBridge.CNCMacroListener;
+import com.pelleplutt.cnc.io.CommProtoCnc;
+import com.pelleplutt.cnc.io.CommProtoCnc.CNCListener;
+import com.pelleplutt.cnc.io.CommProtoCnc.CNCMacroListener;
 import com.pelleplutt.cnc.io.CNCCommunication;
 import com.pelleplutt.cnc.io.CNCCommunicationUDP;
-import com.pelleplutt.cnc.io.CNCFile;
+import com.pelleplutt.cnc.io.CommProtoFile;
 import com.pelleplutt.cnc.io.CNCProtocol;
 import com.pelleplutt.cnc.io.CommMux;
+import com.pelleplutt.cnc.io.CommProtoSys;
 import com.pelleplutt.cnc.types.Point;
 import com.pelleplutt.cnc.types.UnitType;
 import com.pelleplutt.cnc.ui.CNCUI;
@@ -29,8 +30,9 @@ import com.pelleplutt.util.UIUtil;
 
 public class Controller {
   static CNCUI ui;
-  static CNCBridge bridge;
-  static CNCFile fileTx;
+  static CommProtoCnc bridge;
+  static CommProtoSys commSys;
+  static CommProtoFile fileTx;
   static CNCCommunication cncComm;
   static CommMux commMux;
   static GVirtualCNC cncVirtual;
@@ -65,12 +67,14 @@ public class Controller {
 
     commMux = new CommMux();
     
-    bridge = new CNCBridge();
+    bridge = new CommProtoCnc();
     bridge.setMachine(cncVirtual);
-    fileTx = new CNCFile();
+    fileTx = new CommProtoFile();
+    commSys = new CommProtoSys();
     
     commMux.addTransport(bridge);
     commMux.addTransport(fileTx);
+    commMux.addTransport(commSys);
     
     ui = new CNCUI();
 
@@ -194,11 +198,12 @@ public class Controller {
         cncComm.setListener(ui.getBluePrintPanel());
 
         cncComm.connect(port, 115200, commMux);
+        commMux.txNodeAlert(0x12, null);
+
         connectionState = StateConnection.CONNECTED;
         bridge.setConnected(true);
         cncControllerListener.sr(bridge.cncGetStatus());
         bridge.cncInit();
-        commMux.txNodeAlert(0x12, null);
       } catch (Throwable t) {
         Log.printStackTrace(t);
         try {
@@ -421,7 +426,7 @@ public class Controller {
 
     @Override
     public void curCommand(int id, double e, double s, CNCCommand c) {
-      uiNotify(new StateCommandExe(id - CNCBridge.MOTION_ID_START, c));
+      uiNotify(new StateCommandExe(id - CommProtoCnc.MOTION_ID_START, c));
     }
   };
 

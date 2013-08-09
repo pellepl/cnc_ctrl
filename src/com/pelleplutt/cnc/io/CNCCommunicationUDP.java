@@ -21,7 +21,6 @@ import com.pelleplutt.comm.CommRxer;
 import com.pelleplutt.comm.CommTimeoutException;
 import com.pelleplutt.comm.CommTxer;
 import com.pelleplutt.util.AppSystem;
-import com.pelleplutt.util.HexUtil;
 import com.pelleplutt.util.Log;
 
 public class CNCCommunicationUDP extends CNCCommunication implements CommRxer, CommTxer {

@@ -17,14 +17,14 @@ import javax.swing.JPanel;
 
 import com.pelleplutt.cnc.Controller;
 import com.pelleplutt.cnc.ctrl.CNCCommand;
-import com.pelleplutt.cnc.io.CNCBridge;
+import com.pelleplutt.cnc.io.CommProtoCnc;
 import com.pelleplutt.cnc.io.CNCCommunication.RxTxListener;
 import com.pelleplutt.cnc.io.CNCProtocol;
 import com.pelleplutt.cnc.types.Point;
 import com.pelleplutt.util.UIUtil;
 
 public class BluePrintPanel extends JPanel implements
-    CNCBridge.CNCListener, MouseListener,
+    CommProtoCnc.CNCListener, MouseListener,
     MouseMotionListener, MouseWheelListener, RxTxListener {
 
   private static final long serialVersionUID = 1500564120445117767L;

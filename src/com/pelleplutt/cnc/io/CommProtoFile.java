@@ -18,7 +18,7 @@ import com.pelleplutt.util.CRCUtil;
 import com.pelleplutt.util.HexUtil;
 import com.pelleplutt.util.Log;
 
-public class CNCFile implements CNCProtocol, Transport {
+public class CommProtoFile implements Transport {
   FileChannel transmitFileCh;
   RandomAccessFile transmitFile = null;
   

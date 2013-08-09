@@ -16,6 +16,7 @@ import com.pelleplutt.util.Log;
 public class CommMux implements Callback {
   public static final int PROTOCOL_CNC = 0x01;
   public static final int PROTOCOL_FILE = 0x02;
+  public static final int PROTOCOL_SYS = 0xff;
   
   
   final boolean DBG = false;

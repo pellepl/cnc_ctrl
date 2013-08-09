@@ -36,7 +36,7 @@ import com.pelleplutt.util.Log;
  * @author petera
  * 
  */
-public class CNCBridge implements Transport, CNCProtocol, Disposable {
+public class CommProtoCnc implements Transport, CNCProtocol, Disposable {
   public static final int COMMAND_SUCCESS = 0;
   public static final int COMMAND_LATCH_BUSY_RETRY = -1;
   public static final int COMMAND_LATCH_ID_MISMATCH_ERROR = -2;
@@ -567,7 +567,7 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
             throw new CNCBridgeError("command err:" + res);
           }
         }
-      } catch (CNCBridge.CNCBridgeError cncErr) {
+      } catch (CommProtoCnc.CNCBridgeError cncErr) {
         Log.println("resetting bridge due to error: " + cncErr.getMessage());
         reset(false);
       } catch (Throwable t) {
@@ -1044,10 +1044,6 @@ public class CNCBridge implements Transport, CNCProtocol, Disposable {
           l.curCommand(curMotionId, exe, sent, c);
         }
       }
-      break;
-    }
-    case COMM_PROTOCOL_ALIVE: {
-      // TODO
       break;
     }
     default:

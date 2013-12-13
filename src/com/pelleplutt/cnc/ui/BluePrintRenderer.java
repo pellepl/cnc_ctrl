@@ -156,8 +156,6 @@ public class BluePrintRenderer extends JPanel implements GVirtualCNC.RenderListe
   
   // RenderListener (GVirtualCNC)
   
-  boolean drill = false;
-  
   @Override
   public void move(GCommand g, boolean rapid, Point p1, Point p2,
       Point cncDelta, Point feeds) {

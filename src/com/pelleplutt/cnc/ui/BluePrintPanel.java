@@ -17,10 +17,12 @@ import javax.swing.JPanel;
 
 import com.pelleplutt.cnc.Controller;
 import com.pelleplutt.cnc.ctrl.CNCCommand;
-import com.pelleplutt.cnc.io.CommProtoCnc;
 import com.pelleplutt.cnc.io.CNCCommunication.RxTxListener;
 import com.pelleplutt.cnc.io.CNCProtocol;
+import com.pelleplutt.cnc.io.CommProtoCnc;
 import com.pelleplutt.cnc.types.Point;
+import com.pelleplutt.cnc.types.UnitType;
+import com.pelleplutt.cnc.ui.BluePrintRenderer.Line;
 import com.pelleplutt.util.UIUtil;
 
 public class BluePrintPanel extends JPanel implements
@@ -42,7 +44,7 @@ public class BluePrintPanel extends JPanel implements
   double exePercentage = 0;
   double sentPercentage = 0;
   
-  volatile double mx, my;
+  volatile double mx, my, omx, omy;
   
   ImageIcon iconPipeDisabled, iconPipeEnabled, iconPipePopulated, iconPipeFull;
   ImageIcon iconCncDisabled, iconCncEnabled;
@@ -56,9 +58,9 @@ public class BluePrintPanel extends JPanel implements
   Color colorSentGlow = new Color(0,255,255,32);
   Color colorSent = new Color(64,255,255,192);
   
-  Color colorOrigo = new Color(32,32,32);
-  Color colorGridMax = new Color(20,20,20);
-  Color colorGridMin = new Color(10,10,10);
+  Color colorOrigo = new Color(64,64,64);
+  Color colorGridMax = new Color(40,40,40);
+  Color colorGridMin = new Color(20,20,20);
 
   Font font = Font.decode("courier-plain-12");
   
@@ -68,6 +70,8 @@ public class BluePrintPanel extends JPanel implements
   double gridMinDiv = 2.5;
   
   List<BluePrintRenderer> blueprints = new ArrayList<BluePrintRenderer>();
+  
+  UserBluePrintRenderer userRenderer;
 
   int bpw, bph;
   
@@ -104,6 +108,10 @@ public class BluePrintPanel extends JPanel implements
     iconErrEmergency = UIUtil.createImageIcon("err_emergency.png");
     iconErrConnection = UIUtil.createImageIcon("err_comm.png");
     iconErrSettings = UIUtil.createImageIcon("err_settings.png");
+    
+    userRenderer = new UserBluePrintRenderer(w, h);
+    userRenderer.setBluePrintPanel(this);
+    blueprints.add(userRenderer);
   }
 
   public void addBluePrint(BluePrintRenderer bp) {
@@ -342,6 +350,25 @@ public class BluePrintPanel extends JPanel implements
     
     yy-=12;
     
+    // user line coords
+    Line userLine = userRenderer.getUser(); 
+    if (userLine != null) {
+      xx = 8;
+      g.setColor(Color.yellow);
+      g.drawString("usr:" + (float)((int)(userLine.o.x*1000))/1000
+          + "," + (float)((int)(userLine.o.y*1000))/1000, xx, yy);
+      xx += 180;
+      g.drawString("" + (float)((int)(userLine.d.x*1000))/1000
+          + "," + (float)((int)(userLine.d.y*1000))/1000, xx, yy);
+      xx += 180;
+      double udx = userLine.o.x - userLine.d.x;
+      double udy = userLine.o.y - userLine.d.y;
+      double dist = Math.sqrt(udx*udx + udy*udy);
+      g.drawString("l:" + (float)((int)(dist*1000))/1000, xx, yy);
+      
+      yy-=12;
+    }
+
     // cnc coords
     if (Controller.isConnected()) {
       xx = 8;
@@ -351,6 +378,7 @@ public class BluePrintPanel extends JPanel implements
       g.drawString("" + (float)((int)(cncPos.y*1000))/1000, xx, yy);
       xx += 90;
       g.drawString("" + (float)((int)(cncPos.z*1000))/1000, xx, yy);
+      yy-=12;
     }
   }
   
@@ -452,14 +480,23 @@ public class BluePrintPanel extends JPanel implements
 
   @Override
   public void mouseDragged(MouseEvent e) {
-    int dx = e.getX() - xdrag;
-    int dy = e.getY() - ydrag;
-    this.dx += (double) dx / mag;
-    this.dy -= (double) dy / mag;
-    xdrag = e.getX();
-    ydrag = e.getY();
-    for (BluePrintRenderer bp : blueprints) {
-      bp.setOffset(this.dx, this.dy);
+    int dx = e.getX() - dragx;
+    int dy = e.getY() - dragy;
+    dragx = e.getX();
+    dragy = e.getY();
+    if (dragbut == MouseEvent.BUTTON2) {
+      this.dx += (double) dx / mag;
+      this.dy -= (double) dy / mag;
+      for (BluePrintRenderer bp : blueprints) {
+        bp.setOffset(this.dx, this.dy);
+      }
+    } else if (dragbut == MouseEvent.BUTTON1) {
+      double nmx = (double)e.getX()/mag - this.dx;
+      double nmy = (bph - (double)e.getY()) / mag - this.dy;
+
+      userRenderer.setUser(
+          new Point(UnitType.MILLIMETERS, omx, omy, 0),
+          new Point(UnitType.MILLIMETERS, nmx, nmy, 0));
     }
 
     repaint();
@@ -475,15 +512,17 @@ public class BluePrintPanel extends JPanel implements
   @Override
   public void mouseClicked(MouseEvent e) {
     // TODO elsewhere
-    if (drawMode == DRAW_MODE_ORTO) {
-      drawMode = DRAW_MODE_TOP;
-    } else {
-      drawMode = DRAW_MODE_ORTO;
+    if (e.getButton() == MouseEvent.BUTTON3) {
+      if (drawMode == DRAW_MODE_ORTO) {
+        drawMode = DRAW_MODE_TOP;
+      } else {
+        drawMode = DRAW_MODE_ORTO;
+      }
+      for (BluePrintRenderer bp : blueprints) {
+        bp.setMagnificationAndOffset(mag, dx, dy);
+      }
+      repaint();
     }
-    for (BluePrintRenderer bp : blueprints) {
-      bp.setMagnificationAndOffset(mag, dx, dy);
-    }
-    repaint();
   }
 
   @Override
@@ -494,12 +533,20 @@ public class BluePrintPanel extends JPanel implements
   public void mouseExited(MouseEvent e) {
   }
 
-  int xdrag, ydrag;
+  int dragox, dragoy, dragx, dragy, dragbut;
 
   @Override
   public void mousePressed(MouseEvent e) {
-    xdrag = e.getX();
-    ydrag = e.getY();
+    dragox = e.getX();
+    dragoy = e.getY();
+    dragx = e.getX();
+    dragy = e.getY();
+    omx = mx;
+    omy = my;
+    dragbut  = e.getButton();
+    if (dragbut == MouseEvent.BUTTON1) {
+      userRenderer.clearUser();
+    }
   }
 
   @Override
